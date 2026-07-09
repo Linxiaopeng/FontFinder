@@ -1,217 +1,177 @@
 var onRun = function (context) {
-
-    // CRAZY CODE: confusing how to use context
-    // This 3 lines use just for deselect layers
-    // but I should use these for all of code
-    var sketch = require('sketch/dom')
-    var document = sketch.fromNative(context.document)
-    var selection = document.selectedLayers;
-
-    var doc = context.document;
-    var page = doc.currentPage();
-    var switchOfSearch = 0;
-    var includedFontName = [];
-    var selectingFontName = [];
-    var userInterface;
-    var SELECT, READY_TO_SEARCH, CANCELLED, NOT_READY;
-    //global var obj to help remove duplicated font names
-    var fontCheck={};
-
-
-    initialise(context);
-    userInterfaceLoop();
-
-
-    function initialise(context) {
-        SELECT = 1000;
-        READY_TO_SEARCH = true;
-        CANCELLED = false;
-        NOT_READY = null;
-
-        // Get font names
-        featureSearchFontName();
+    var sketch = require('sketch');
+    var document = sketch.getSelectedDocument();
+    if (!document) {
+        sketch.UI.message("未找到打开的 Sketch 文档。");
+        return;
+    }
+    
+    var page = document.selectedPage;
+    if (!page) {
+        sketch.UI.message("当前没有活动的页面。");
+        return;
     }
 
+    var includedFontNames = [];
+    var fontCheck = {};
+    var layerToFontsMap = [];
 
-    function userInterfaceLoop() {
+    // 安全地从 Text 图层获取所有字体名称
+    function getFontNamesForLayer(layer) {
+        var fonts = [];
+        
+        // 方案 1: 优先使用 Sketch JS API 官方提供的、最稳定的原生属性
+        if (layer.style && layer.style.fontFamily) {
+            var jsFont = String(layer.style.fontFamily);
+            if (jsFont && jsFont !== "undefined") {
+                fonts.push(jsFont);
+            }
+        }
 
-        var uiResponse = NOT_READY;
+        // 方案 2: 降级到底层的原生对象读取（作为多字体混用时的补充）
+        var nativeLayer = layer.sketchObject;
+        if (nativeLayer) {
+            // 尝试读取单一字体的原生属性
+            try {
+                if (typeof nativeLayer.font === 'function') {
+                    var nsFont = nativeLayer.font();
+                    if (nsFont) {
+                        var fontName = String(nsFont.fontName());
+                        if (fontName && fontName !== "null" && fonts.indexOf(fontName) === -1) {
+                            fonts.push(fontName);
+                        }
+                    }
+                }
+            } catch (e) {}
 
-        while (uiResponse === NOT_READY) {
+            // 针对多字体混用，通过原生 NSAttributedString 属性遍历
+            try {
+                if (typeof nativeLayer.attributedString === 'function') {
+                    var attrStr = nativeLayer.attributedString();
+                    if (attrStr) {
+                        // 遍历富文本属性块
+                        var length = attrStr.length();
+                        var effectiveRange = MOPointer.alloc().initWithValue(NSMakeRange(0, 0));
+                        var idx = 0;
+                        while (idx < length) {
+                            var attrs = attrStr.attributesAtIndex_effectiveRange(idx, effectiveRange);
+                            // NSFontAttributeName 通常在桥接中表现为 "NSFont"
+                            var fontAttr = attrs.objectForKey("NSFont") || attrs.objectForKey("NSFontAttributeName");
+                            if (fontAttr) {
+                                var fName = String(fontAttr.fontName());
+                                if (fName && fonts.indexOf(fName) === -1) {
+                                    fonts.push(fName);
+                                }
+                            }
+                            idx = effectiveRange.value().location + effectiveRange.value().length;
+                        }
+                    }
+                }
+            } catch (e) {}
+        }
 
-            // Create the interface
-            var modal = createUserInterface();
+        return fonts;
+    }
 
-            // Show it and process the form
-            uiResponse = processButtonClick(modal, modal.runModal());
-
-            // Process the response
-            switch (uiResponse) {
-
-                // Cancelled
-                case NOT_READY:
-                uiResponse = CANCELLED;
-                break;
-
-                // Let's go
-                case READY_TO_SEARCH:
-                break;
-
-                // Cancelled
-                case CANCELLED:
-                break;
+    // 查找当前 Page 下的所有 Text 图层（使用最新的标准选择器）
+    var textLayers = sketch.find('Text', page);
+    
+    for (var i = 0; i < textLayers.length; i++) {
+        var layer = textLayers[i];
+        var fonts = getFontNamesForLayer(layer);
+        if (fonts.length > 0) {
+            layerToFontsMap.push({
+                layer: layer,
+                fonts: fonts
+            });
+            for (var j = 0; j < fonts.length; j++) {
+                var fName = fonts[j];
+                if (!fontCheck[fName]) {
+                    fontCheck[fName] = true;
+                    includedFontNames.push(fName);
+                }
             }
         }
     }
 
+    includedFontNames.sort();
 
-    function createUserInterface() {
-
-        userInterface = COSAlertWindow.new();
-
-        // Title
-        userInterface.setMessageText('Font Finder');
-
-        if (includedFontName.length == 0) {
-            userInterface.setInformativeText('This page dosen\'t have any fonts.');
-        } else {
-            userInterface.setInformativeText('You can find and select font items.');
-        }
-
-        // Checkbox
-        for (var i = 0; i < includedFontName.length; i++) {
-            var checkbox = NSButton.alloc().initWithFrame(NSMakeRect( 0, i * 24, 300, 18 ));
-            checkbox.setButtonType(NSButtonTypeSwitch);
-            checkbox.setTitle(includedFontName[i]);
-            checkbox.setState(false);
-            userInterface.addAccessoryView( checkbox );
-        }
-
-        // Button
-
-        if (includedFontName.length == 0) {
-            userInterface.addButtonWithTitle('OK');
-        } else {
-            userInterface.addButtonWithTitle('Select');
-            userInterface.addButtonWithTitle('Cancel');
-        }
-
-        return userInterface;
+    // 创建 macOS 原生 NSAlert 弹窗
+    var alert = NSAlert.alloc().init();
+    alert.setMessageText('Font Finder (字体查找工具)');
+    
+    if (includedFontNames.length === 0) {
+        alert.setInformativeText("当前页面未包含任何文本字体。");
+        alert.addButtonWithTitle('确定');
+        alert.runModal();
+        return;
     }
 
+    alert.setInformativeText('请勾选你想要查找并选中的字体：');
+    alert.addButtonWithTitle('选择并定位');
+    alert.addButtonWithTitle('取消');
 
-    function processButtonClick(modal, buttonClick) {
+    var rowHeight = 24;
+    var containerWidth = 350;
+    var containerHeight = includedFontNames.length * rowHeight;
+    var maxContainerHeight = 240;
+    
+    var containerView = NSView.alloc().initWithFrame(NSMakeRect(0, 0, containerWidth, containerHeight));
+    
+    var checkboxes = [];
+    for (var i = 0; i < includedFontNames.length; i++) {
+        var y = (includedFontNames.length - 1 - i) * rowHeight;
+        var checkbox = NSButton.alloc().initWithFrame(NSMakeRect(0, y, containerWidth - 20, 20));
+        checkbox.setButtonType(3); // 3 代表 NSSwitchButton
+        checkbox.setTitle(includedFontNames[i]);
+        checkbox.setState(0);
+        containerView.addSubview(checkbox);
+        checkboxes.push(checkbox);
+    }
 
-        var result;
+    if (containerHeight > maxContainerHeight) {
+        var scrollView = NSScrollView.alloc().initWithFrame(NSMakeRect(0, 0, containerWidth, maxContainerHeight));
+        scrollView.setHasVerticalScroller(true);
+        scrollView.setHasHorizontalScroller(false);
+        scrollView.setDocumentView(containerView);
+        containerView.scrollPoint(NSMakePoint(0, containerHeight - maxContainerHeight));
+        alert.setAccessoryView(scrollView);
+    } else {
+        alert.setAccessoryView(containerView);
+    }
 
-        if (buttonClick === SELECT) {
+    var response = alert.runModal();
+    if (response == 1000) { 
+        var selectingFonts = [];
+        for (var i = 0; i < checkboxes.length; i++) {
+            if (checkboxes[i].state() == 1) { 
+                selectingFonts.push(checkboxes[i].title());
+            }
+        }
 
-            // Deselect selection
-            selection.clear();
-
-            for (var i = 0; i < includedFontName.length; i++) {
-                if ([[[modal viewAtIndex: i] selectedCell] state] == true) {
-                    selectingFontName.push([[[modal viewAtIndex: i] selectedCell] title]);
+        if (selectingFonts.length > 0) {
+            // 修正：正确的清除选择集图层的方法
+            document.selectedLayers.layers = [];
+            
+            var selectedCount = 0;
+            for (var i = 0; i < layerToFontsMap.length; i++) {
+                var item = layerToFontsMap[i];
+                var matched = false;
+                for (var j = 0; j < item.fonts.length; j++) {
+                    if (selectingFonts.indexOf(item.fonts[j]) !== -1) {
+                        matched = true;
+                        break;
+                    }
+                }
+                if (matched) {
+                    item.layer.selected = true;
+                    selectedCount++;
                 }
             }
 
-            // Select Font Layers
-            featureSelectSpecificFontTextLayer();
-
-            if (selectingFontName.length > 0) {
-                result = READY_TO_SEARCH;
-            } else {
-                result = NOT_READY;
-            }
-
+            sketch.UI.message("已成功选中 " + selectedCount + " 个匹配字体的文本图层。");
         } else {
-            // Cancel button pressed
-            result = CANCELLED;
-        }
-
-        return result;
-    }
-
-
-    function featureSearchFontName () {
-        switchOfSearch = 1;
-        searchInLayer(page);
-        includedFontName.sort();
-    }
-
-
-    function featureSelectSpecificFontTextLayer () {
-        switchOfSearch = 2;
-        searchInLayer(page);
-    }
-
-
-    function searchInLayer(layer) {
-        // Determine the type of layer we're looking at
-        switch ([layer class]) {
-
-            // Text layer - this is the important one
-            case MSTextLayer:
-            if (switchOfSearch == 1) {
-                showFontName(layer);
-            } else if (switchOfSearch == 2) {
-                selectTextLayer(layer);
-            }
-            break;
-
-            // If we've started our search at the document root, loop through the pages
-            case MSDocument:
-            var documentPages = [layer pages];
-            for (var i = 0; i < [documentPages count]; i++) {
-                var documentPage = [documentPages objectAtIndex:i];
-                searchInLayer(documentPage);
-            }
-            break;
-
-            // Otherwise everything below that is an alias for layers anyway so we can treat them the same and loop through any sublayers
-            case MSPage:
-            case MSLayerGroup:
-            case MSSymbolMaster:
-            case MSArtboardGroup:
-            var sublayers = [layer layers];
-            for (var i = 0; i < [sublayers count]; i++) {
-                var sublayer = [sublayers objectAtIndex: i];
-                searchInLayer(sublayer);
-            }
-            break;
+            sketch.UI.message("未勾选任何字体。");
         }
     }
-
-
-    function showFontName(layer) {
-        //Command "layer.attributedString().fontNames()"  shows all fonts used in one textlayer, in a specific format
-        //I replace the '{(', ')}', '"'(\u0022), and line feeds to '' and split them in to string groups by ','
-        //and then use fontcheck{} to help remove duplicated font names
-        //P.S. 
-        //The "layer.attributedString().unavailableFontNames()" shows the missed font names in one textlayer
-        if (!layer.attributedString()) {
-            return;
-        }
-        var tempFontName = layer.attributedString().fontNames().toString().replace('{(','').replace(')}','').replace(/\n/g,'').replace(/\u0022/g,'').split(',');
-        for(var z=0;z<tempFontName.length;z++){
-            var fontName = tempFontName[z];                 
-            if (!fontCheck[fontName]){
-                 fontCheck[fontName] = true;
-                 includedFontName.push(fontName);
-            }
-        }
-    }
-
-
-    function selectTextLayer(layer) {
-        //Some font names contents '"', I use '.replace(/\s+/g,"")' to clean up blanks in the store font names to get accurate search results
-        if (!layer.attributedString()) {
-            return;
-        }
-        for (var i = 0; i < selectingFontName.length; i++) {
-            if (layer.attributedString().fontNames().toString().indexOf(selectingFontName[i].replace(/\s+/g,"")) != -1) {
-                layer.select_byExpandingSelection(true, true);
-            }
-        }
-    }
-}
+};
