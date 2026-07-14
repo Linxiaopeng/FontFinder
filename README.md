@@ -1,5 +1,22 @@
 ![Logo designed by Eli Azee](FontFinder-Logo-V1.jpg)
 
+# Font Finder
+
+Maintained fork of the original Font Finder plugin for Sketch.
+
+This fork includes:
+
+- Sketch 2026 compatibility fixes
+- Improved font detection
+- Mixed-font support
+- UI bug fixes
+- Ongoing maintenance
+
+Original project:
+https://github.com/ukn530/FontFinder
+
+---
+
 
 # Font Finder Sketch Plugin
 
