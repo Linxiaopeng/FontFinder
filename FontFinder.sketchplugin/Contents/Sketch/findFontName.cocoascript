@@ -5,19 +5,19 @@ var onRun = function (context) {
     var document = sketch.getSelectedDocument();
 
     if (!document) {
-        UI.message("未找到打开的文档");
+        UI.message("No document is currently open");
         return;
     }
 
     var page = document.selectedPage;
 
     if (!page) {
-        UI.message("未找到当前页面");
+        UI.message("No active page found");
         return;
     }
 
     //--------------------------------------------------
-    // 获取文本图层中的字体
+    // Get fonts from a text layer
     //--------------------------------------------------
     function getFontsFromTextLayer(layer) {
 
@@ -31,7 +31,7 @@ var onRun = function (context) {
                 return fonts;
             }
 
-            // 单字体
+            // Single font
             try {
 
                 if (typeof nativeLayer.font === "function") {
@@ -55,7 +55,7 @@ var onRun = function (context) {
                 log("Single Font Error: " + err);
             }
 
-            // 混合字体
+            // Mixed fonts
             try {
 
                 if (
@@ -135,7 +135,7 @@ var onRun = function (context) {
     }
 
     //--------------------------------------------------
-    // 收集字体
+    // Collect fonts
     //--------------------------------------------------
 
     var textLayers = sketch.find('Text', page);
@@ -168,13 +168,13 @@ var onRun = function (context) {
 
     if (allFonts.length === 0) {
 
-        UI.message("当前页面未发现字体");
+        UI.message("No fonts found on this page");
 
         return;
     }
 
     //--------------------------------------------------
-    // 弹窗
+    // Dialog
     //--------------------------------------------------
 
     var alert =
@@ -185,19 +185,19 @@ var onRun = function (context) {
     );
 
     alert.setInformativeText(
-        "请选择需要查找的字体"
+        "Select the font(s) you want to find"
     );
 
     alert.addButtonWithTitle(
-        "选择"
+        "Find"
     );
 
     alert.addButtonWithTitle(
-        "取消"
+        "Cancel"
     );
 
     //--------------------------------------------------
-    // 字体列表
+    // Font list
     //--------------------------------------------------
 
     var rowHeight = 26;
@@ -219,7 +219,6 @@ var onRun = function (context) {
             )
         );
 
-    // 从顶部开始布局
     contentView.setFlipped(true);
 
     var checkboxes = [];
@@ -261,7 +260,6 @@ var onRun = function (context) {
         );
     }
 
-    // 字体少时不滚动
     if (contentHeight <= 240) {
 
         alert.setAccessoryView(
@@ -298,7 +296,7 @@ var onRun = function (context) {
     }
 
     //--------------------------------------------------
-    // 显示弹窗
+    // Show dialog
     //--------------------------------------------------
 
     var response =
@@ -312,7 +310,7 @@ var onRun = function (context) {
     }
 
     //--------------------------------------------------
-    // 获取用户选择字体
+    // Get selected fonts
     //--------------------------------------------------
 
     var selectedFonts = [];
@@ -337,14 +335,14 @@ var onRun = function (context) {
     ) {
 
         UI.message(
-            "未选择任何字体"
+            "No font selected"
         );
 
         return;
     }
 
     //--------------------------------------------------
-    // 清除当前选中
+    // Clear selection
     //--------------------------------------------------
 
     textLayers.forEach(function (
@@ -354,7 +352,7 @@ var onRun = function (context) {
     });
 
     //--------------------------------------------------
-    // 匹配图层
+    // Match layers
     //--------------------------------------------------
 
     var matchedLayers = [];
@@ -389,7 +387,7 @@ var onRun = function (context) {
     });
 
     //--------------------------------------------------
-    // 自动定位
+    // Center on first matched layer
     //--------------------------------------------------
 
     try {
@@ -408,13 +406,13 @@ var onRun = function (context) {
     } catch (e) {}
 
     //--------------------------------------------------
-    // 提示
+    // Result message
     //--------------------------------------------------
 
     UI.message(
-        "已选中 " +
+        "Selected " +
         matchedLayers.length +
-        " 个文本图层"
+        " matching text layer(s)"
     );
 
 };
