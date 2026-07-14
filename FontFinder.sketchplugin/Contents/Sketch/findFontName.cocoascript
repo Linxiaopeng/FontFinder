@@ -1,177 +1,420 @@
 var onRun = function (context) {
     var sketch = require('sketch');
+    var UI = sketch.UI;
+
     var document = sketch.getSelectedDocument();
+
     if (!document) {
-        sketch.UI.message("未找到打开的 Sketch 文档。");
+        UI.message("未找到打开的文档");
         return;
     }
-    
+
     var page = document.selectedPage;
+
     if (!page) {
-        sketch.UI.message("当前没有活动的页面。");
+        UI.message("未找到当前页面");
         return;
     }
 
-    var includedFontNames = [];
-    var fontCheck = {};
-    var layerToFontsMap = [];
+    //--------------------------------------------------
+    // 获取文本图层中的字体
+    //--------------------------------------------------
+    function getFontsFromTextLayer(layer) {
 
-    // 安全地从 Text 图层获取所有字体名称
-    function getFontNamesForLayer(layer) {
         var fonts = [];
-        
-        // 方案 1: 优先使用 Sketch JS API 官方提供的、最稳定的原生属性
-        if (layer.style && layer.style.fontFamily) {
-            var jsFont = String(layer.style.fontFamily);
-            if (jsFont && jsFont !== "undefined") {
-                fonts.push(jsFont);
-            }
-        }
 
-        // 方案 2: 降级到底层的原生对象读取（作为多字体混用时的补充）
-        var nativeLayer = layer.sketchObject;
-        if (nativeLayer) {
-            // 尝试读取单一字体的原生属性
+        try {
+
+            var nativeLayer = layer.sketchObject;
+
+            if (!nativeLayer) {
+                return fonts;
+            }
+
+            // 单字体
             try {
-                if (typeof nativeLayer.font === 'function') {
-                    var nsFont = nativeLayer.font();
-                    if (nsFont) {
-                        var fontName = String(nsFont.fontName());
-                        if (fontName && fontName !== "null" && fonts.indexOf(fontName) === -1) {
+
+                if (typeof nativeLayer.font === "function") {
+
+                    var font = nativeLayer.font();
+
+                    if (font) {
+
+                        var fontName = String(font.fontName());
+
+                        if (
+                            fontName &&
+                            fonts.indexOf(fontName) === -1
+                        ) {
                             fonts.push(fontName);
                         }
                     }
                 }
-            } catch (e) {}
 
-            // 针对多字体混用，通过原生 NSAttributedString 属性遍历
+            } catch (err) {
+                log("Single Font Error: " + err);
+            }
+
+            // 混合字体
             try {
-                if (typeof nativeLayer.attributedString === 'function') {
-                    var attrStr = nativeLayer.attributedString();
-                    if (attrStr) {
-                        // 遍历富文本属性块
-                        var length = attrStr.length();
-                        var effectiveRange = MOPointer.alloc().initWithValue(NSMakeRange(0, 0));
-                        var idx = 0;
-                        while (idx < length) {
-                            var attrs = attrStr.attributesAtIndex_effectiveRange(idx, effectiveRange);
-                            // NSFontAttributeName 通常在桥接中表现为 "NSFont"
-                            var fontAttr = attrs.objectForKey("NSFont") || attrs.objectForKey("NSFontAttributeName");
-                            if (fontAttr) {
-                                var fName = String(fontAttr.fontName());
-                                if (fName && fonts.indexOf(fName) === -1) {
-                                    fonts.push(fName);
+
+                if (
+                    typeof nativeLayer.attributedString === "function"
+                ) {
+
+                    var attrString =
+                        nativeLayer.attributedString();
+
+                    if (attrString) {
+
+                        var length = attrString.length();
+
+                        var rangePointer =
+                            MOPointer.alloc().init();
+
+                        var index = 0;
+
+                        while (index < length) {
+
+                            var attrs =
+                                attrString.attributesAtIndex_effectiveRange(
+                                    index,
+                                    rangePointer
+                                );
+
+                            if (attrs) {
+
+                                var font =
+                                    attrs.objectForKey(
+                                        NSFontAttributeName
+                                    ) ||
+                                    attrs.objectForKey("NSFont");
+
+                                if (font) {
+
+                                    var mixedFont =
+                                        String(
+                                            font.fontName()
+                                        );
+
+                                    if (
+                                        fonts.indexOf(
+                                            mixedFont
+                                        ) === -1
+                                    ) {
+                                        fonts.push(
+                                            mixedFont
+                                        );
+                                    }
                                 }
                             }
-                            idx = effectiveRange.value().location + effectiveRange.value().length;
+
+                            var range =
+                                rangePointer.value();
+
+                            if (!range) {
+                                break;
+                            }
+
+                            index =
+                                range.location +
+                                range.length;
                         }
                     }
                 }
-            } catch (e) {}
+
+            } catch (err) {
+                log("Attributed Font Error: " + err);
+            }
+
+        } catch (err) {
+            log(err);
         }
 
         return fonts;
     }
 
-    // 查找当前 Page 下的所有 Text 图层（使用最新的标准选择器）
+    //--------------------------------------------------
+    // 收集字体
+    //--------------------------------------------------
+
     var textLayers = sketch.find('Text', page);
-    
-    for (var i = 0; i < textLayers.length; i++) {
-        var layer = textLayers[i];
-        var fonts = getFontNamesForLayer(layer);
-        if (fonts.length > 0) {
-            layerToFontsMap.push({
-                layer: layer,
-                fonts: fonts
-            });
-            for (var j = 0; j < fonts.length; j++) {
-                var fName = fonts[j];
-                if (!fontCheck[fName]) {
-                    fontCheck[fName] = true;
-                    includedFontNames.push(fName);
-                }
-            }
+
+    var fontMap = [];
+    var fontIndex = {};
+
+    textLayers.forEach(function (layer) {
+
+        var fonts =
+            getFontsFromTextLayer(layer);
+
+        if (fonts.length === 0) {
+            return;
         }
-    }
 
-    includedFontNames.sort();
+        fontMap.push({
+            layer: layer,
+            fonts: fonts
+        });
 
-    // 创建 macOS 原生 NSAlert 弹窗
-    var alert = NSAlert.alloc().init();
-    alert.setMessageText('Font Finder (字体查找工具)');
-    
-    if (includedFontNames.length === 0) {
-        alert.setInformativeText("当前页面未包含任何文本字体。");
-        alert.addButtonWithTitle('确定');
-        alert.runModal();
+        fonts.forEach(function (font) {
+            fontIndex[font] = true;
+        });
+
+    });
+
+    var allFonts =
+        Object.keys(fontIndex).sort();
+
+    if (allFonts.length === 0) {
+
+        UI.message("当前页面未发现字体");
+
         return;
     }
 
-    alert.setInformativeText('请勾选你想要查找并选中的字体：');
-    alert.addButtonWithTitle('选择并定位');
-    alert.addButtonWithTitle('取消');
+    //--------------------------------------------------
+    // 弹窗
+    //--------------------------------------------------
 
-    var rowHeight = 24;
-    var containerWidth = 350;
-    var containerHeight = includedFontNames.length * rowHeight;
-    var maxContainerHeight = 240;
-    
-    var containerView = NSView.alloc().initWithFrame(NSMakeRect(0, 0, containerWidth, containerHeight));
-    
+    var alert =
+        NSAlert.alloc().init();
+
+    alert.setMessageText(
+        "Font Finder"
+    );
+
+    alert.setInformativeText(
+        "请选择需要查找的字体"
+    );
+
+    alert.addButtonWithTitle(
+        "选择"
+    );
+
+    alert.addButtonWithTitle(
+        "取消"
+    );
+
+    //--------------------------------------------------
+    // 字体列表
+    //--------------------------------------------------
+
+    var rowHeight = 26;
+    var width = 360;
+
+    var contentHeight =
+        allFonts.length * rowHeight;
+
+    var viewHeight =
+        Math.min(contentHeight, 240);
+
+    var contentView =
+        NSView.alloc().initWithFrame(
+            NSMakeRect(
+                0,
+                0,
+                width,
+                contentHeight
+            )
+        );
+
+    // 从顶部开始布局
+    contentView.setFlipped(true);
+
     var checkboxes = [];
-    for (var i = 0; i < includedFontNames.length; i++) {
-        var y = (includedFontNames.length - 1 - i) * rowHeight;
-        var checkbox = NSButton.alloc().initWithFrame(NSMakeRect(0, y, containerWidth - 20, 20));
-        checkbox.setButtonType(3); // 3 代表 NSSwitchButton
-        checkbox.setTitle(includedFontNames[i]);
-        checkbox.setState(0);
-        containerView.addSubview(checkbox);
-        checkboxes.push(checkbox);
+
+    for (
+        var i = 0;
+        i < allFonts.length;
+        i++
+    ) {
+
+        var checkbox =
+            NSButton.alloc().initWithFrame(
+                NSMakeRect(
+                    10,
+                    i * rowHeight,
+                    width - 20,
+                    20
+                )
+            );
+
+        checkbox.setButtonType(
+            NSSwitchButton
+        );
+
+        checkbox.setTitle(
+            allFonts[i]
+        );
+
+        checkbox.setState(
+            NSControlStateValueOff
+        );
+
+        contentView.addSubview(
+            checkbox
+        );
+
+        checkboxes.push(
+            checkbox
+        );
     }
 
-    if (containerHeight > maxContainerHeight) {
-        var scrollView = NSScrollView.alloc().initWithFrame(NSMakeRect(0, 0, containerWidth, maxContainerHeight));
-        scrollView.setHasVerticalScroller(true);
-        scrollView.setHasHorizontalScroller(false);
-        scrollView.setDocumentView(containerView);
-        containerView.scrollPoint(NSMakePoint(0, containerHeight - maxContainerHeight));
-        alert.setAccessoryView(scrollView);
+    // 字体少时不滚动
+    if (contentHeight <= 240) {
+
+        alert.setAccessoryView(
+            contentView
+        );
+
     } else {
-        alert.setAccessoryView(containerView);
+
+        var scrollView =
+            NSScrollView.alloc().initWithFrame(
+                NSMakeRect(
+                    0,
+                    0,
+                    width,
+                    viewHeight
+                )
+            );
+
+        scrollView.setHasVerticalScroller(
+            true
+        );
+
+        scrollView.setHasHorizontalScroller(
+            false
+        );
+
+        scrollView.setDocumentView(
+            contentView
+        );
+
+        alert.setAccessoryView(
+            scrollView
+        );
     }
 
-    var response = alert.runModal();
-    if (response == 1000) { 
-        var selectingFonts = [];
-        for (var i = 0; i < checkboxes.length; i++) {
-            if (checkboxes[i].state() == 1) { 
-                selectingFonts.push(checkboxes[i].title());
-            }
-        }
+    //--------------------------------------------------
+    // 显示弹窗
+    //--------------------------------------------------
 
-        if (selectingFonts.length > 0) {
-            // 修正：正确的清除选择集图层的方法
-            document.selectedLayers.layers = [];
-            
-            var selectedCount = 0;
-            for (var i = 0; i < layerToFontsMap.length; i++) {
-                var item = layerToFontsMap[i];
-                var matched = false;
-                for (var j = 0; j < item.fonts.length; j++) {
-                    if (selectingFonts.indexOf(item.fonts[j]) !== -1) {
-                        matched = true;
-                        break;
-                    }
-                }
-                if (matched) {
-                    item.layer.selected = true;
-                    selectedCount++;
-                }
-            }
+    var response =
+        alert.runModal();
 
-            sketch.UI.message("已成功选中 " + selectedCount + " 个匹配字体的文本图层。");
-        } else {
-            sketch.UI.message("未勾选任何字体。");
-        }
+    if (
+        response !==
+        NSAlertFirstButtonReturn
+    ) {
+        return;
     }
+
+    //--------------------------------------------------
+    // 获取用户选择字体
+    //--------------------------------------------------
+
+    var selectedFonts = [];
+
+    checkboxes.forEach(function (
+        checkbox
+    ) {
+
+        if (checkbox.state()) {
+
+            selectedFonts.push(
+                String(
+                    checkbox.title()
+                )
+            );
+        }
+
+    });
+
+    if (
+        selectedFonts.length === 0
+    ) {
+
+        UI.message(
+            "未选择任何字体"
+        );
+
+        return;
+    }
+
+    //--------------------------------------------------
+    // 清除当前选中
+    //--------------------------------------------------
+
+    textLayers.forEach(function (
+        layer
+    ) {
+        layer.selected = false;
+    });
+
+    //--------------------------------------------------
+    // 匹配图层
+    //--------------------------------------------------
+
+    var matchedLayers = [];
+
+    fontMap.forEach(function (
+        item
+    ) {
+
+        var matched =
+            item.fonts.some(function (
+                fontName
+            ) {
+
+                return (
+                    selectedFonts.indexOf(
+                        fontName
+                    ) !== -1
+                );
+
+            });
+
+        if (matched) {
+
+            item.layer.selected =
+                true;
+
+            matchedLayers.push(
+                item.layer
+            );
+        }
+
+    });
+
+    //--------------------------------------------------
+    // 自动定位
+    //--------------------------------------------------
+
+    try {
+
+        if (
+            matchedLayers.length > 0 &&
+            document.centerOnLayer
+        ) {
+
+            document.centerOnLayer(
+                matchedLayers[0]
+            );
+
+        }
+
+    } catch (e) {}
+
+    //--------------------------------------------------
+    // 提示
+    //--------------------------------------------------
+
+    UI.message(
+        "已选中 " +
+        matchedLayers.length +
+        " 个文本图层"
+    );
+
 };
